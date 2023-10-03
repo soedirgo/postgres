@@ -5,25 +5,100 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - runner: [self-hosted, X64]
-            arch: amd64
-          - runner: arm-runner
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v3
+  # test-all-in-one:
+  #   strategy:
+  #     matrix:
+  #       include:
+  #         - runner: [self-hosted, X64]
+  #           arch: amd64
+  #         - runner: arm-runner
+  #           arch: arm64
+  #   runs-on: ${{ matrix.runner }}
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v3
 
+  #     - run: docker context create builders
+  #     - uses: docker/setup-buildx-action@v3
+  #       with:
+  #         endpoint: builders
+
+  #     - name: Run aio integration tests
+  #       run: |
+  #         pip3 install docker pytest pytest-testinfra
+  #         pytest -vv testinfra/test_all_in_one.py
+
+  test-ami:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - id: args
+        uses: mikefarah/yq@master
+        with:
+          cmd: yq 'to_entries | map(select(.value|type == "!!str")) |  map(.key + "=" + .value) | join("\n")' 'ansible/vars.yml'
       - run: docker context create builders
       - uses: docker/setup-buildx-action@v3
         with:
           endpoint: builders
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          # caching bug?
+          push: true
+          build-args: |
+            ${{ steps.args.outputs.result }}
+          target: extensions
+          tags: ghcr.io/soedirgo/postgres:extensions
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # - name: Extract built packages
+      #   run: |
+      #     mkdir -p /tmp/extensions ansible/files/extensions
+      #     docker save supabase/postgres:extensions | tar xv -C /tmp/extensions
+      #     for layer in /tmp/extensions/*/layer.tar; do
+      #       tar xvf "$layer" -C ansible/files/extensions --strip-components 1
+      #     done
 
-      - name: Run aio integration tests
-        run: |
-          pip3 install docker pytest pytest-testinfra
-          pytest -vv testinfra/test_all_in_one.py
+      - id: version
+        run: echo "${{ steps.args.outputs.result }}" | grep "postgresql" >> "$GITHUB_OUTPUT"
+      - name: Build Postgres deb
+        uses: docker/build-push-action@v5
+        with:
+          # caching bug?
+          push: true
+          file: docker/Dockerfile
+          target: pg-deb
+          tags: ghcr.io/soedirgo/postgres:deb
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # - name: Extract Postgres deb
+      #   run: |
+      #     mkdir -p /tmp/build ansible/files/postgres
+      #     docker save supabase/postgres:deb | tar xv -C /tmp/build
+      #     for layer in /tmp/build/*/layer.tar; do
+      #       tar xvf "$layer" -C ansible/files/postgres --strip-components 1
+      #     done
+
+      # - name: Build AMI
+      #   run: |
+      #     GIT_SHA=${{github.sha}}
+      #     packer build -var "git-head-version=${GIT_SHA}" -var "packer-execution-id=${GITHUB_RUN_ID}" -var-file="development-arm.vars.pkr.hcl" -var-file="common.vars.pkr.hcl" -var "ansible_arguments=" -var "postgres-version=ami-test" -var "force-deregister=true" -var 'ami_regions=["ap-southeast-1"]' amazon-arm64.pkr.hcl
+
+      # - name: Cleanup resources on build cancellation
+      #   if: ${{ cancelled() }}
+      #   run: |
+      #     aws ec2 describe-instances --filters "Name=tag:packerExecutionId,Values=${GITHUB_RUN_ID}" --query "Reservations[].Instances[].InstanceId" --output text | xargs -I {} aws ec2 terminate-instances --instance-ids {}
