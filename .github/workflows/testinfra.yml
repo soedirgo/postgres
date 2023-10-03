@@ -55,15 +55,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v5
         with:
-          # caching bug?
-          push: true
+          push: false
+          load: true
           build-args: |
             ${{ steps.args.outputs.result }}
           target: extensions
-          tags: ghcr.io/soedirgo/postgres:extensions
+          tags: soedirgo/postgres:extensions
           platforms: linux/amd64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=ghcr.io/soedirgo/postgres:extensions-cache
+          cache-to: type=registry,ref=ghcr.io/soedirgo/postgres:extensions-cache,mode=max
       # - name: Extract built packages
       #   run: |
       #     mkdir -p /tmp/extensions ansible/files/extensions
@@ -77,14 +77,14 @@ jobs:
       - name: Build Postgres deb
         uses: docker/build-push-action@v5
         with:
-          # caching bug?
-          push: true
+          push: false
+          load: true
           file: docker/Dockerfile
           target: pg-deb
-          tags: ghcr.io/soedirgo/postgres:deb
+          tags: soedirgo/postgres:deb
           platforms: linux/amd64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=ghcr.io/soedirgo/postgres:deb-cache
+          cache-to: type=registry,ref=ghcr.io/soedirgo/postgres:deb-cache,mode=max
       # - name: Extract Postgres deb
       #   run: |
       #     mkdir -p /tmp/build ansible/files/postgres
